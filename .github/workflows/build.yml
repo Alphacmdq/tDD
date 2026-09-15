@@ -1,0 +1,42 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install the M5Stack core and libraries
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json
+          arduino-cli core update-index
+          arduino-cli core install m5stack:esp32
+          arduino-cli lib install M5Unified M5GFX
+
+      - name: Compile
+        run: |
+          arduino-cli compile \
+            --fqbn m5stack:esp32:m5stack_sticks3 \
+            --export-binaries \
+            diaper_decider_stick
+
+      - name: Collect the flashable image
+        run: |
+          mkdir -p out
+          cp diaper_decider_stick/build/*/diaper_decider_stick.ino.merged.bin out/diaper_decider_stick.merged.bin
+          ls -la out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: diaper-decider-firmware
+          path: out/diaper_decider_stick.merged.bin
