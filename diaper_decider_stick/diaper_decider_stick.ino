@@ -501,36 +501,42 @@ void decide() {
 }
 
 /* ==========================================================
-   5) POWER — sleep with the IMU left on, so a shake wakes it
+   5) POWER — sleep with the IMU left on, so a shake wakes it.
+      The PMIC and the IMU sit on M5Unified's internal I2C bus, which
+      also carries the battery gauge and the speaker enable. So we
+      only take that bus over at the very end, right before sleeping.
    ========================================================== */
 M5PM1  pm1;
 BMI270 imu;
-bool pm1_ok = false, imu_ok = false;
-
-void powerSetup() {
-  auto sda = M5.getPin(m5::pin_name_t::in_i2c_sda);
-  auto scl = M5.getPin(m5::pin_name_t::in_i2c_scl);
-  Wire.end();
-  Wire.begin(sda, scl, 100000U);
-
-  pm1_ok = (pm1.begin(&Wire, M5PM1_DEFAULT_ADDR, sda, scl, M5PM1_I2C_FREQ_100K) == M5PM1_OK);
-  if (pm1_ok) {
-    // IMU INT1 is wired to the PMIC's GPIO4; a falling edge there wakes the PMIC.
-    pm1.gpioSetWakeEnable(M5PM1_GPIO_NUM_4, true);
-    pm1.gpioSetWakeEdge(M5PM1_GPIO_NUM_4, M5PM1_GPIO_WAKE_FALLING);
-  }
-  imu_ok = (imu.beginI2C(BMI2_I2C_PRIM_ADDR) == BMI2_OK);
-  if (imu_ok) imu.disableFeature(BMI2_ANY_MOTION);   // only armed right before sleep
-}
 
 void goToSleep() {
   frameBegin();
   drawWrapped("Shake to wake.", C_DIM, &fonts::FreeSans9pt7b, H / 2);
   frameEnd();
-  delay(700);
+  delay(600);
+  M5.Speaker.end();
+  M5.Display.sleep();                       // uses the PMIC — do it before taking the bus
+
+  // Hand the internal bus from M5Unified to Arduino Wire.
+  auto sda = M5.getPin(m5::pin_name_t::in_i2c_sda);
+  auto scl = M5.getPin(m5::pin_name_t::in_i2c_scl);
+  M5.In_I2C.release();
+  Wire.begin(sda, scl, 100000U);
+
+  bool pm1_ok = (pm1.begin(&Wire, M5PM1_DEFAULT_ADDR, sda, scl, M5PM1_I2C_FREQ_100K) == M5PM1_OK);
+  bool imu_ok = (imu.beginI2C(BMI2_I2C_PRIM_ADDR, Wire) == BMI2_OK);
+
+  // Show what we found for one second — handy while tuning.
+  M5.Display.wakeup();
+  frameBegin();
+  drawWrapped(pm1_ok ? (imu_ok ? "PMIC ok - IMU ok" : "PMIC ok - IMU missing")
+                     : "PMIC missing", C_DIM, &fonts::FreeSans9pt7b, H / 2);
+  frameEnd();
+  delay(1000);
+  M5.Display.sleep();
 
   if (pm1_ok && imu_ok) {
-    // Arm the IMU: "any motion" above the threshold pulls INT1 low.
+    // Arm the IMU: "any motion" above the threshold pulls INT1 low...
     bmi2_sens_config cfg = {};
     cfg.type = BMI2_ANY_MOTION;
     cfg.cfg.any_motion.threshold = SHAKE_THRESHOLD;
@@ -551,15 +557,23 @@ void goToSleep() {
     imu.setInterruptPinConfig(ip);
     imu.mapInterruptToPin(BMI2_ANY_MOTION_INT, BMI2_INT1);
 
-    M5.Display.sleep();
+    // ...and INT1 is wired to the PMIC's GPIO4: a falling edge there wakes it.
+    pm1.gpioSetWakeEnable(M5PM1_GPIO_NUM_4, true);
+    pm1.gpioSetWakeEdge(M5PM1_GPIO_NUM_4, M5PM1_GPIO_WAKE_FALLING);
+  }
+
+  if (pm1_ok) {
     // Keep the IMU's rail (L1) alive while the PMIC sleeps, then sleep.
     pm1.setLdoEnable(true);
     pm1.ldoSetPowerHold(true);
     pm1.setLedEnLevel(true);
-    pm1.shutdown();
+    pm1.shutdown();                          // power button (and shake) wake it
+    while (true) delay(1000);
   }
-  // Fallback if the PMIC or IMU didn't come up: plain power off (power button wakes).
-  M5.Display.sleep();
+
+  // PMIC not reachable: give the bus back and use the plain power-off.
+  Wire.end();
+  M5.In_I2C.begin();
   M5.Power.powerOff();
   while (true) delay(1000);
 }
@@ -579,7 +593,6 @@ void setup() {
   initColors();
   randomSeed(esp_random());
   loadState();
-  powerSetup();
   showIdle();
   lastPress = millis();
 }
