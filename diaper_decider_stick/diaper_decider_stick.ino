@@ -29,13 +29,15 @@ const int      LINES_PER_ROUND = 3;
 const uint32_t LINE_MS   = 4600;
 const uint32_t THINK_MS  = 1900;
 const uint32_t FINAL_MS  = 1600;
-const uint32_t RESULT_MS = 20000;      // verdict stays this long, then idle screen
-const uint32_t IDLE_OFF_MS = 90000;    // idle → sleep (shake or power button wakes it)
+const uint32_t RESULT_MS = 15000;      // verdict stays this long, then straight to sleep
+const uint32_t IDLE_OFF_MS = 25000;    // woke up but nobody pressed → sleep
+const uint32_t CPU_MHZ     = 160;      // 240 runs warm; 160 looks identical on screen
+const bool     SLEEP_DIAG  = false;    // 1-second "PMIC ok - IMU ok" screen before sleeping
 
 // Shake sensitivity. Threshold: 1 LSB = 0.48 mg. 0x400 ≈ 0.5 g — a real shake,
 // not a walk. Duration: 1 LSB = 20 ms. Lower threshold = more sensitive.
-const uint16_t SHAKE_THRESHOLD = 0x400;
-const uint16_t SHAKE_DURATION  = 0x0A;
+const uint16_t SHAKE_THRESHOLD = 0x600;   // was 0x400 — needs a proper shake now
+const uint16_t SHAKE_DURATION  = 0x14;    // 400 ms of motion, not a single bump
 
 // NOTE: built-in fonts have no "…" glyph, so use three dots.
 // Every list below is capped at 128 entries (one bit each in the no-repeat mask).
@@ -526,14 +528,15 @@ void goToSleep() {
   bool pm1_ok = (pm1.begin(&Wire, M5PM1_DEFAULT_ADDR, sda, scl, M5PM1_I2C_FREQ_100K) == M5PM1_OK);
   bool imu_ok = (imu.beginI2C(BMI2_I2C_PRIM_ADDR, Wire) == BMI2_OK);
 
-  // Show what we found for one second — handy while tuning.
-  M5.Display.wakeup();
-  frameBegin();
-  drawWrapped(pm1_ok ? (imu_ok ? "PMIC ok - IMU ok" : "PMIC ok - IMU missing")
-                     : "PMIC missing", C_DIM, &fonts::FreeSans9pt7b, H / 2);
-  frameEnd();
-  delay(1000);
-  M5.Display.sleep();
+  if (SLEEP_DIAG) {
+    M5.Display.wakeup();
+    frameBegin();
+    drawWrapped(pm1_ok ? (imu_ok ? "PMIC ok - IMU ok" : "PMIC ok - IMU missing")
+                       : "PMIC missing", C_DIM, &fonts::FreeSans9pt7b, H / 2);
+    frameEnd();
+    delay(1000);
+    M5.Display.sleep();
+  }
 
   if (pm1_ok && imu_ok) {
     // Arm the IMU: "any motion" above the threshold pulls INT1 low...
@@ -588,6 +591,7 @@ void setup() {
   M5.begin(cfg);
   M5.Display.setRotation(1);
   M5.Display.setBrightness(180);
+  setCpuFrequencyMhz(CPU_MHZ);
   W = M5.Display.width(); H = M5.Display.height();
   canvas.createSprite(W, H);
   initColors();
@@ -601,16 +605,15 @@ void loop() {
   M5.update();
 
   if (M5.BtnA.wasPressed()) {
-    lastPress = millis();
     decide();
     uint32_t t = millis();
     while (millis() - t < RESULT_MS) {
       M5.update();
-      if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed()) break;
+      if (M5.BtnA.wasPressed()) { decide(); t = millis(); }
+      if (M5.BtnB.wasPressed()) { showTally(); delay(2500); t = millis(); }
       delay(10);
     }
-    showIdle();
-    lastPress = millis();
+    goToSleep();
   }
 
   if (M5.BtnB.wasPressed()) {
