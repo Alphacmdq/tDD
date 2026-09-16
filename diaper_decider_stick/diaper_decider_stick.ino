@@ -297,19 +297,19 @@ void saveState() {
   prefs.end();
 }
 
-inline bool bitGet(const uint8_t* m, int i) { return m[i >> 3] & (1 << (i & 7)); }
-inline void bitSet(uint8_t* m, int i)       { m[i >> 3] |= (1 << (i & 7)); }
+inline bool maskGet(const uint8_t* m, int i) { return m[i >> 3] & (1 << (i & 7)); }
+inline void maskSet(uint8_t* m, int i)      { m[i >> 3] |= (1 << (i & 7)); }
 
 // Pick an index not yet used; when every index is used, start the cycle over.
 int pickUnused(uint8_t* mask, int n) {
   if (n > MASK_BYTES * 8) n = MASK_BYTES * 8;
   int free = 0;
-  for (int i = 0; i < n; i++) if (!bitGet(mask, i)) free++;
+  for (int i = 0; i < n; i++) if (!maskGet(mask, i)) free++;
   if (free == 0) { memset(mask, 0, MASK_BYTES); free = n; }
   int k = random(free);                    // the k-th unused entry
   for (int i = 0; i < n; i++) {
-    if (bitGet(mask, i)) continue;
-    if (k-- == 0) { bitSet(mask, i); return i; }
+    if (maskGet(mask, i)) continue;
+    if (k-- == 0) { maskSet(mask, i); return i; }
   }
   return 0;                                // unreachable
 }
